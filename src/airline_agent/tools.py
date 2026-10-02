@@ -103,3 +103,53 @@ def hold_flight(flight_id: str, passenger_name: str) -> dict:
         "message": f"Flight with ID {flight_id} not found.",
         "flight_id": flight_id,
     }
+
+
+# ==========================
+# TOOLS 4
+# ==========================
+@tool 
+def confirm_booking(hold_id: str) -> dict:
+    """
+    Confirm a flight booking from an existing hold.
+    """
+    # Check if the hold exists
+    hold = HOLDS.get(hold_id.upper())
+
+    if hold is None:
+        return {
+            "status": "error",
+            "error": "Hold not found.",
+            "hold_id": hold_id,
+        }
+
+    # Check if the hold is still valid (not expired)
+    if hold["status"] != "held":
+        return {
+            "status": "error",
+            "error": "Hold is no longer valid.",
+            "hold_id": hold_id,
+        }
+
+    # Create a booking entry
+    booking_id = f"BOOK-{len(BOOKINGS) + 1:03d}"
+
+    booking = {
+        "booking_id": booking_id,
+        "hold_id": hold["hold_id"],
+        "flight_id": hold["flight_id"],
+        "passenger_name": hold["passenger_name"],
+        "status": "confirmed",
+    }
+
+    # Save the booking
+    BOOKINGS[booking_id] = booking
+
+    # Update the hold status to confirmed
+    hold["status"] = "confirmed"
+
+    return {
+        "status": "ok",
+        "message": f"Booking confirmed for hold {hold_id}.",
+        "booking": booking,
+    }
