@@ -153,3 +153,53 @@ def confirm_booking(hold_id: str) -> dict:
         "message": f"Booking confirmed for hold {hold_id}.",
         "booking": booking,
     }
+
+# ==========================
+# TOOLS 5
+# ==========================
+@tool 
+def cancel_hold(hold_id: str) -> dict:
+    """
+    Cancel an active flight hold and release the seat back to available seats.
+    """
+    # Check if the hold exists
+    hold = HOLDS.get(hold_id.upper())
+
+    if hold is None:
+        return {
+            "status": "error",
+            "error": "Hold not found.",
+            "hold_id": hold_id,
+        }
+
+    # Check if the hold is still valid (not expired)
+    if hold["status"] != "held":
+        return {
+            "status": "error",
+            "error": "Hold is no longer valid.",
+            "hold_id": hold_id,
+        }
+
+    # Update the hold status to canceled
+    hold["status"] = "canceled"
+
+    # Increase available seats for the flight
+    for flight in FLIGHTS:
+        if flight["flight_id"] == hold["flight_id"]:
+            flight["available_seats"] += 1
+            break
+
+    if flight is None:
+        return {
+            "status": "error",
+            "error": "Flight not found for the hold.",
+            "hold_id": hold_id,
+            "flight_id": hold["flight_id"],
+        }
+    
+    return {
+        "status": "ok",
+        "message": f"Hold {hold_id} has been canceled.",
+        "hold": hold,
+        "remaining_seats": flight["available_seats"],
+    }

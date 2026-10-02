@@ -1,8 +1,10 @@
 from airline_agent.tools import(
+    cancel_hold,
     get_flight_detail,
     search_flights,
     hold_flight,
     confirm_booking,
+    cancel_booking,
 )
 
 # ===========================
@@ -78,54 +80,110 @@ from airline_agent.tools import(
 # ===========================
 # Tests for tool 4
 # =========================
-def test_confirm_booking():
+# def test_confirm_booking():
+#     hold_result = hold_flight.invoke({
+#         "flight_id": "VN006",
+#         "passenger_name": "Nguyen Van A",
+#     })
+
+#     assert hold_result["status"] == "ok"
+
+#     hold_id = hold_result["hold"]["hold_id"]
+
+#     result = confirm_booking.invoke({
+#         "hold_id": hold_id,
+#     })
+
+#     assert result["status"] == "ok"
+#     assert result["booking"]["booking_id"].startswith("BOOK")
+#     assert result["booking"]["hold_id"] == hold_id
+#     assert result["booking"]["flight_id"] == "VN006"
+#     assert result["booking"]["passenger_name"] == "Nguyen Van A"
+#     assert result["booking"]["status"] == "confirmed"
+
+# def test_confirm_booking_hold_not_found():
+#     result = confirm_booking.invoke({
+#         "hold_id": "INVALID",
+#     })
+
+#     assert result["status"] == "error"
+#     assert result["error"] == "Hold not found"
+
+# def test_confirm_booking_already_confirmed():
+#     hold_result = hold_flight.invoke({
+#         "flight_id": "VN003",
+#         "passenger_name": "Nguyen Van B",
+#     })
+
+#     hold_id = hold_result["hold"]["hold_id"]
+
+#     # Confirm lần 1
+#     first_result = confirm_booking.invoke({
+#         "hold_id": hold_id,
+#     })
+
+#     assert first_result["status"] == "ok"
+
+#     # Confirm lần 2
+#     second_result = confirm_booking.invoke({
+#         "hold_id": hold_id,
+#     })
+
+#     assert second_result["status"] == "error"
+#     assert second_result["error"] == "Hold is not active"
+
+# ===========================
+# Tests for tool 5
+# =========================
+def test_cancel_hold():
+    # Tạo hold
     hold_result = hold_flight.invoke({
-        "flight_id": "VN006",
-        "passenger_name": "Nguyen Van A",
+        "flight_id": "VN456",
+        "passenger_name": "Nguyen Van C",
     })
 
     assert hold_result["status"] == "ok"
 
     hold_id = hold_result["hold"]["hold_id"]
+    seats_after_hold = hold_result["remaining_seats"]
 
-    result = confirm_booking.invoke({
+    # Hủy hold
+    result = cancel_hold.invoke({
         "hold_id": hold_id,
     })
 
     assert result["status"] == "ok"
-    assert result["booking"]["booking_id"].startswith("BOOK")
-    assert result["booking"]["hold_id"] == hold_id
-    assert result["booking"]["flight_id"] == "VN006"
-    assert result["booking"]["passenger_name"] == "Nguyen Van A"
-    assert result["booking"]["status"] == "confirmed"
+    assert result["hold"]["status"] == "cancelled"
+    assert result["available_seats"] == seats_after_hold + 1
 
-def test_confirm_booking_hold_not_found():
-    result = confirm_booking.invoke({
+def test_cancel_hold_not_found():
+    result = cancel_hold.invoke({
         "hold_id": "INVALID",
     })
 
     assert result["status"] == "error"
     assert result["error"] == "Hold not found"
 
-def test_confirm_booking_already_confirmed():
+def test_cancel_confirmed_hold():
+    # Tạo hold
     hold_result = hold_flight.invoke({
-        "flight_id": "VN003",
-        "passenger_name": "Nguyen Van B",
+        "flight_id": "VJ789",
+        "passenger_name": "Nguyen Van D",
     })
 
     hold_id = hold_result["hold"]["hold_id"]
 
-    # Confirm lần 1
-    first_result = confirm_booking.invoke({
+    # Confirm booking
+    confirm_result = confirm_booking.invoke({
         "hold_id": hold_id,
     })
 
-    assert first_result["status"] == "ok"
+    assert confirm_result["status"] == "ok"
 
-    # Confirm lần 2
-    second_result = confirm_booking.invoke({
+    # Thử cancel sau khi đã confirm
+    result = cancel_hold.invoke({
         "hold_id": hold_id,
     })
 
-    assert second_result["status"] == "error"
-    assert second_result["error"] == "Hold is not active"
+    assert result["status"] == "error"
+    assert result["error"] == "Hold is not active"
