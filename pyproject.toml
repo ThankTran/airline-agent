@@ -1,0 +1,14 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+
+[project]
+name = "airline-agent"
+version = "0.1.0"
+description = "Airline booking agent using LangChain and LangGraph"
+requires-python = ">=3.11"
+
+
+[tool.setuptools.packages.find]
+where = ["src"]
