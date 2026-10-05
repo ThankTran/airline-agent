@@ -1,40 +1,32 @@
 from langchain_core.tools import tool
 
-from airline_agent.database import (
-    FLIGHTS,
-    HOLDS,
-    BOOKINGS,
-)
+from airline_agent.database import FLIGHTS, HOLDS, BOOKINGS, get_flight_by_id
 
-# ==========================
-# TOOLS 1
-# ==========================
+
+def _error(error_code: str, message: str, retryable: bool = False, **extra) -> dict:
+    return {
+        "status": "error",
+        "error_code": error_code,
+        "message": message,
+        "retryable": retryable,
+        **extra,
+    }
+
+
 @tool
-def search_flights(
-    origin: str,
-    destination: str,
-    date: str,
-) -> dict:
-    """
-    Search for available flights based on origin, destination, and date.
+def search_flights(origin: str, destination: str, date: str) -> dict:
+    """Search available flights by route and date."""
+    origin = origin.upper()
+    destination = destination.upper()
 
-    Args:
-        origin (str): The departure city.
-        destination (str): The arrival city.
-        date (str): The date of the flight in YYYY-MM-DD format.
-
-    Returns:
-        dict: A dictionary containing the search results with flight details.
-    """
     results = [
-        flight
+        dict(flight)
         for flight in FLIGHTS
-        if (
-            flight["origin"] == origin.upper()
-            and flight["destination"] == destination.upper()
-            and flight["date"] == date
-            and flight["available_seats"] > 0
-        )
+        if flight["origin"] == origin
+        and flight["destination"] == destination
+        and flight["date"] == date
+        and flight.get("status") == "available"
+        and flight["available_seats"] > 0
     ]
 
     return {
@@ -43,97 +35,90 @@ def search_flights(
         "flights": results,
     }
 
-# ==========================
-# TOOLS 2
-# ==========================
+
 @tool
 def get_flight_detail(flight_id: str) -> dict:
-    """
-    Get the details of a specific flight by its flight ID.
-    """
-    
-    for flight in FLIGHTS:
-        if flight["flight_id"] == flight_id.upper():
-            return {
-                "status": "ok",
-                "flight": flight,
-            }
+    """Get one flight by ID."""
+    flight = get_flight_by_id(flight_id)
+    if not flight:
+        return _error(
+            "FLIGHT_NOT_FOUND",
+            f"Flight {flight_id} does not exist.",
+            retryable=False,
+            flight_id=flight_id,
+        )
 
-    return {
-        "status": "error",
-        "message": f"Flight with ID {flight_id} not found.",
-        "flight_id": flight_id,
-    }
+    return {"status": "ok", "flight": dict(flight)}
 
-# ==========================
-# TOOLS 3
-# ==========================
-@tool 
+
+@tool
 def hold_flight(flight_id: str, passenger_name: str) -> dict:
-    """
-    Hold one seat for a specific flight for a passenger.
-    """
-    for flight in FLIGHTS:
-        if flight["flight_id"] == flight_id.upper():
-            if flight["available_seats"] > 0:
-                # Create a hold entry
-                HOLDS[passenger_name] = {
-                    "hold_id": f"HOLD-{len(HOLDS) + 1:03d}",
-                    "flight_id": flight_id.upper(),
-                    "passenger_name": passenger_name,
-                    "status": "held",
-                }
-                # Decrease available seats
-                flight["available_seats"] -= 1
-                return {
-                    "status": "ok",
-                    "message": f"Flight {flight_id} held for passenger {passenger_name}.",
-                    "hold": HOLDS[passenger_name],
-                    "remaining_seats": flight["available_seats"],
-                }
-            else:
-                return {
-                    "status": "error",
-                    "message": f"No available seats for flight {flight_id}.",
-                    "flight_id": flight_id,
-                }
+    """Hold one seat for a passenger."""
+    flight = get_flight_by_id(flight_id)
+    if not flight:
+        return _error(
+            "FLIGHT_NOT_FOUND",
+            f"Flight {flight_id} does not exist.",
+            retryable=False,
+            flight_id=flight_id,
+        )
+
+    if flight.get("status") == "cancelled":
+        return _error(
+            "FLIGHT_CANCELLED",
+            f"Flight {flight_id} has been cancelled.",
+            retryable=True,
+            flight_id=flight_id,
+        )
+
+    if flight.get("status") == "sold_out" or flight["available_seats"] <= 0:
+        return _error(
+            "NO_AVAILABLE_SEATS",
+            f"No available seats for flight {flight_id}.",
+            retryable=True,
+            flight_id=flight_id,
+        )
+
+    hold_id = f"HOLD-{len(HOLDS) + 1:03d}"
+    hold = {
+        "hold_id": hold_id,
+        "flight_id": flight["flight_id"],
+        "passenger_name": passenger_name.strip(),
+        "status": "active",
+    }
+    HOLDS[hold_id] = hold
+    flight["available_seats"] -= 1
+    if flight["available_seats"] == 0:
+        flight["status"] = "sold_out"
 
     return {
-        "status": "error",
-        "message": f"Flight with ID {flight_id} not found.",
-        "flight_id": flight_id,
+        "status": "ok",
+        "message": f"Flight {flight_id} held for {passenger_name}.",
+        "hold": dict(hold),
+        "remaining_seats": flight["available_seats"],
     }
 
 
-# ==========================
-# TOOLS 4
-# ==========================
-@tool 
+@tool
 def confirm_booking(hold_id: str) -> dict:
-    """
-    Confirm a flight booking from an existing hold.
-    """
-    # Check if the hold exists
-    hold = HOLDS.get(hold_id.upper())
-
+    """Confirm a booking from an active hold."""
+    hold_id = hold_id.upper()
+    hold = HOLDS.get(hold_id)
     if hold is None:
-        return {
-            "status": "error",
-            "error": "Hold not found.",
-            "hold_id": hold_id,
-        }
+        return _error("HOLD_NOT_FOUND", "Hold not found.", False, hold_id=hold_id)
 
-    # Check if the hold is still valid (not expired)
-    if hold["status"] != "held":
-        return {
-            "status": "error",
-            "error": "Hold is no longer valid.",
-            "hold_id": hold_id,
-        }
+    if hold["status"] == "expired":
+        return _error("HOLD_EXPIRED", "Hold has expired.", True, hold_id=hold_id)
 
-    # Create a booking entry
+    if hold["status"] != "active":
+        return _error(
+            "HOLD_NOT_ACTIVE",
+            f"Hold is not active (status={hold['status']}).",
+            False,
+            hold_id=hold_id,
+        )
+
     booking_id = f"BOOK-{len(BOOKINGS) + 1:03d}"
-
     booking = {
         "booking_id": booking_id,
         "hold_id": hold["hold_id"],
@@ -141,65 +126,49 @@ def confirm_booking(hold_id: str) -> dict:
         "passenger_name": hold["passenger_name"],
         "status": "confirmed",
     }
-
-    # Save the booking
     BOOKINGS[booking_id] = booking
-
-    # Update the hold status to confirmed
     hold["status"] = "confirmed"
 
     return {
         "status": "ok",
         "message": f"Booking confirmed for hold {hold_id}.",
-        "booking": booking,
+        "booking": dict(booking),
     }
 
-# ==========================
-# TOOLS 5
-# ==========================
-@tool 
+
+@tool
 def cancel_hold(hold_id: str) -> dict:
-    """
-    Cancel an active flight hold and release the seat back to available seats.
-    """
-    # Check if the hold exists
-    hold = HOLDS.get(hold_id.upper())
-
+    """Cancel an active hold and release its seat."""
+    hold_id = hold_id.upper()
+    hold = HOLDS.get(hold_id)
     if hold is None:
-        return {
-            "status": "error",
-            "error": "Hold not found.",
-            "hold_id": hold_id,
-        }
+        return _error("HOLD_NOT_FOUND", "Hold not found.", False, hold_id=hold_id)
 
-    # Check if the hold is still valid (not expired)
-    if hold["status"] != "held":
-        return {
-            "status": "error",
-            "error": "Hold is no longer valid.",
-            "hold_id": hold_id,
-        }
+    if hold["status"] != "active":
+        return _error(
+            "HOLD_NOT_ACTIVE",
+            f"Hold is not active (status={hold['status']}).",
+            False,
+            hold_id=hold_id,
+        )
 
-    # Update the hold status to canceled
-    hold["status"] = "canceled"
+    hold["status"] = "cancelled"
+    flight = get_flight_by_id(hold["flight_id"])
+    if not flight:
+        return _error(
+            "FLIGHT_NOT_FOUND",
+            "Flight for the hold no longer exists.",
+            False,
+            hold_id=hold_id,
+        )
 
-    # Increase available seats for the flight
-    for flight in FLIGHTS:
-        if flight["flight_id"] == hold["flight_id"]:
-            flight["available_seats"] += 1
-            break
+    flight["available_seats"] += 1
+    if flight.get("status") == "sold_out":
+        flight["status"] = "available"
 
-    if flight is None:
-        return {
-            "status": "error",
-            "error": "Flight not found for the hold.",
-            "hold_id": hold_id,
-            "flight_id": hold["flight_id"],
-        }
-    
     return {
         "status": "ok",
-        "message": f"Hold {hold_id} has been canceled.",
-        "hold": hold,
+        "message": f"Hold {hold_id} cancelled.",
+        "hold": dict(hold),
         "remaining_seats": flight["available_seats"],
     }
