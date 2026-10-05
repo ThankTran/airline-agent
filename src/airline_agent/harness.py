@@ -1,417 +1,236 @@
 from collections import deque
+from datetime import datetime
+from typing import Any
 
-from airline_agent.database import (
-    FLIGHTS,
-    HOLDS,
-    BOOKINGS,
-)
+from airline_agent.database import BOOKINGS, FLIGHTS, HOLDS, get_flight_by_id
 
 
 class LoopDetector:
-    """
-    Phát hiện vòng lặp trong các hành động của agent.
+    """Phát hiện duplicate action/observation và trạng thái không tiến triển."""
 
-    Sử dụng deque để lưu trữ các hành động gần đây
-    và kiểm tra xem có hành động nào lặp lại hay không.
+    NON_REPEATABLE_ACTIONS = {"hold_flight", "confirm_booking", "cancel_hold"}
 
-    3 tín hiệu:
-    1. Cùng tool + cùng arguments được gọi lặp lại
-    2. Các tool khác nhau nhưng trả về cùng observation
-    3. Trạng thái nghiệp vụ không tiến triển
-    """
-
-    def __init__(
-        self,
-        window=6,
-        repeat_k=2,
-        same_obs_k=4,
-        stall_n=5,
-    ):
+    def __init__(self, window=6, repeat_k=2, same_obs_k=4, stall_n=5):
         self.recent = deque(maxlen=window)
         self.observations = deque(maxlen=window)
-
         self.repeat_k = repeat_k
         self.same_obs_k = same_obs_k
         self.stall_n = stall_n
-
-        self.last_state = None
+        self.last_progress = None
         self.stall_count = 0
 
-    def check(
-        self,
-        tool: str,
-        args: dict,
-        observation=None,
-        progress=None,
-    ):
-        """
-        Trả về cảnh báo nếu phát hiện vòng lặp.
-        Trả về None nếu không phát hiện vòng lặp.
-        """
+    @staticmethod
+    def _freeze(value: Any):
+        if isinstance(value, dict):
+            return tuple(sorted((k, LoopDetector._freeze(v)) for k, v in value.items()))
+        if isinstance(value, list):
+            return tuple(LoopDetector._freeze(v) for v in value)
+        return value
 
-        # ========================================================
-        # 1. Kiểm tra trùng action
-        # ========================================================
-
-        fingerprint = (
-            tool,
-            repr(sorted(args.items())),
-        )
-
-        count = self.recent.count(fingerprint) + 1
-
-        if count >= self.repeat_k:
-            return (
-                f"LOOP: '{tool}' được gọi {count} lần "
-                f"với cùng arguments {args}"
-            )
-
-        self.recent.append(fingerprint)
-
-        # ========================================================
-        # 2. Kiểm tra trùng observation
-        # ========================================================
+    def check(self, tool: str, args: dict, observation=None, progress=None, check_action=True):
+        if check_action:
+            fingerprint = (tool, self._freeze(args))
+            count = self.recent.count(fingerprint) + 1
+            # Side-effect actions bị chặn sớm; read-only actions được phép lặp nếu còn progress.
+            if tool in self.NON_REPEATABLE_ACTIONS and count >= self.repeat_k:
+                return f"LOOP_DUPLICATE_ACTION: {tool} repeated {count} times with same args."
+            self.recent.append(fingerprint)
 
         if observation is not None:
-            observation_fp = repr(observation)
-
-            count_obs = (
-                self.observations.count(observation_fp) + 1
-            )
-
+            observation_fp = self._freeze(observation)
+            count_obs = self.observations.count(observation_fp) + 1
             if count_obs >= self.same_obs_k:
-                return (
-                    f"LOOP: Nhận được cùng observation "
-                    f"{count_obs} lần: "
-                    f"trả về cùng kết quả {observation}"
-                )
-
+                return f"LOOP_DUPLICATE_OBSERVATION: same observation repeated {count_obs} times."
             self.observations.append(observation_fp)
 
-        # ========================================================
-        # 3. Kiểm tra trạng thái nghiệp vụ không tiến triển
-        # ========================================================
-
         if progress is not None:
-            if progress == self.last_state:
+            progress_fp = self._freeze(progress)
+            if progress_fp == self.last_progress:
                 self.stall_count += 1
             else:
                 self.stall_count = 0
-
-            self.last_state = progress
-
+            self.last_progress = progress_fp
             if self.stall_count >= self.stall_n:
-                return (
-                    f"LOOP: Trạng thái nghiệp vụ không tiến triển "
-                    f"trong {self.stall_count} lần liên tiếp: "
-                    f"{progress}"
-                )
+                return f"LOOP_NO_PROGRESS: business state stalled for {self.stall_count} checks."
 
         return None
 
 
 class BookingHarness:
-    """
-    Harness kiểm soát agent đặt vé máy bay.
+    READ_ONLY_ACTIONS = {"search_flights", "get_flight_detail"}
+    WRITE_ACTIONS = {"hold_flight", "cancel_hold"}
+    COMMIT_ACTIONS = {"confirm_booking"}
 
-    Harness chịu trách nhiệm:
-    1. Kiểm tra ràng buộc dữ liệu
-    2. Kiểm tra điều kiện hoàn thành
-    3. Kiểm tra quyền thực hiện hành động
-    4. Bàn giao khi agent không thể hoàn thành an toàn
-    """
-
-    # ============================================================
-    # 1. DATA CONSTRAINTS
-    # ============================================================
-
-    def validate_flight_request(
-        self,
-        origin: str,
-        destination: str,
-        date: str,
-    ) -> dict:
-        """
-        Kiểm tra dữ liệu đầu vào của yêu cầu tìm chuyến bay.
-        """
-
+    def validate_flight_request(self, origin: str, destination: str, date: str) -> dict:
         errors = []
+        origin = (origin or "").strip().upper()
+        destination = (destination or "").strip().upper()
+        date = (date or "").strip()
 
         if not origin:
             errors.append("Origin is required.")
+        elif len(origin) != 3 or not origin.isalpha():
+            errors.append("Origin must be a 3-letter airport code.")
 
         if not destination:
             errors.append("Destination is required.")
+        elif len(destination) != 3 or not destination.isalpha():
+            errors.append("Destination must be a 3-letter airport code.")
+
+        if origin and destination and origin == destination:
+            errors.append("Origin and destination must be different.")
 
         if not date:
             errors.append("Date is required.")
-
-        if origin and len(origin) != 3:
-            errors.append(
-                "Origin must be a 3-letter airport code."
-            )
-
-        if destination and len(destination) != 3:
-            errors.append(
-                "Destination must be a 3-letter airport code."
-            )
-
-        return {
-            "valid": len(errors) == 0,
-            "errors": errors,
-        }
-
-    # ============================================================
-    # 2. COMPLETION CRITERIA
-    # ============================================================
-
-    def check_completion(
-        self,
-        state: dict,
-    ) -> dict:
-        """
-        Kiểm tra xem agent đã hoàn thành nhiệm vụ
-        đặt vé hay chưa.
-        """
-
-        required_fields = [
-            "origin",
-            "destination",
-            "date",
-            "flight_id",
-            "passenger_name",
-            "hold_id",
-            "booking_id",
-        ]
-
-        missing = [
-            field
-            for field in required_fields
-            if not state.get(field)
-        ]
-
-        booking_id = state.get("booking_id")
-
-        if booking_id and booking_id in BOOKINGS:
-            booking_confirmed = (
-                BOOKINGS[booking_id]["status"] == "confirmed"
-            )
         else:
-            booking_confirmed = False
+            try:
+                datetime.strptime(date, "%Y-%m-%d")
+            except ValueError:
+                errors.append("Date must use YYYY-MM-DD format.")
+
+        return {"valid": not errors, "errors": errors}
+
+    def validate_selected_flight(self, state: dict) -> dict:
+        flight_id = state.get("flight_id")
+        if not flight_id:
+            return {"valid": False, "reason": "No flight has been selected."}
+
+        flight = get_flight_by_id(flight_id)
+        if not flight:
+            return {"valid": False, "reason": "Selected flight does not exist."}
+
+        expected = (state.get("origin"), state.get("destination"), state.get("date"))
+        actual = (flight["origin"], flight["destination"], flight["date"])
+        if actual != expected:
+            return {"valid": False, "reason": "Selected flight does not match requested route/date."}
+
+        if flight.get("status") != "available" or flight.get("available_seats", 0) <= 0:
+            return {"valid": False, "reason": "Selected flight is not currently available."}
+
+        return {"valid": True, "reason": "Selected flight is valid."}
+
+    def validate_hold_for_confirmation(self, state: dict) -> dict:
+        hold_id = state.get("hold_id")
+        hold = HOLDS.get(hold_id) if hold_id else None
+        if not hold:
+            return {"valid": False, "reason": "Hold does not exist."}
+        if hold.get("status") != "active":
+            return {"valid": False, "reason": f"Hold is not active (status={hold.get('status')})."}
+        if hold.get("passenger_name") != state.get("passenger_name"):
+            return {"valid": False, "reason": "Hold belongs to a different passenger."}
+        if hold.get("flight_id") != state.get("flight_id"):
+            return {"valid": False, "reason": "Hold belongs to a different flight."}
+        return {"valid": True, "reason": "Hold is valid."}
+
+    def check_authorization(self, action: str, state: dict) -> dict:
+        if action in self.READ_ONLY_ACTIONS:
+            return {"allowed": True, "reason": "Read-only action is allowed."}
+
+        if action in self.WRITE_ACTIONS:
+            if not (state.get("passenger_name") or "").strip():
+                return {"allowed": False, "reason": "Passenger name is required for state-changing actions."}
+            return {"allowed": True, "reason": "Write action authorized."}
+
+        if action in self.COMMIT_ACTIONS:
+            if not (state.get("passenger_name") or "").strip():
+                return {"allowed": False, "reason": "Passenger name is required before booking."}
+            if not state.get("user_confirmed_booking", False):
+                return {"allowed": False, "reason": "Explicit user confirmation is required before confirming booking."}
+            return {"allowed": True, "reason": "Commit action explicitly authorized."}
+
+        return {"allowed": False, "reason": f"Unknown action: {action}."}
+
+    def check_completion(self, state: dict) -> dict:
+        required = ["origin", "destination", "date", "flight_id", "passenger_name", "hold_id", "booking_id"]
+        missing = [field for field in required if not state.get(field)]
+        if missing:
+            return {"completed": False, "reason": "missing_fields", "missing": missing}
+
+        booking = BOOKINGS.get(state["booking_id"])
+        if not booking:
+            return {"completed": False, "reason": "booking_not_found", "missing": []}
+        if booking.get("status") != "confirmed":
+            return {"completed": False, "reason": "booking_not_confirmed", "missing": []}
+        if booking.get("flight_id") != state.get("flight_id"):
+            return {"completed": False, "reason": "wrong_flight", "missing": []}
+        if booking.get("passenger_name") != state.get("passenger_name"):
+            return {"completed": False, "reason": "wrong_passenger", "missing": []}
+
+        flight = get_flight_by_id(booking["flight_id"])
+        if not flight:
+            return {"completed": False, "reason": "flight_not_found", "missing": []}
+        if (flight["origin"], flight["destination"], flight["date"]) != (
+            state["origin"], state["destination"], state["date"]
+        ):
+            return {"completed": False, "reason": "booking_does_not_match_request", "missing": []}
 
         return {
-            "completed": (
-                len(missing) == 0
-                and booking_confirmed
-            ),
-            "missing": missing,
-            "booking_confirmed": booking_confirmed,
+            "completed": True,
+            "reason": "verified_booking",
+            "missing": [],
+            "booking_id": state["booking_id"],
         }
 
-    # ============================================================
-    # 3. AUTHORIZATION CHECKS
-    # ============================================================
-
-    def check_authorization(
-        self,
-        action: str,
-        state: dict,
-    ) -> dict:
-        """
-        Kiểm tra xem agent có quyền thực hiện hành động hay không.
-        """
-
-        # Các action chỉ đọc dữ liệu
-        read_only_actions = {
-            "search_flights",
-            "get_flight_detail",
-        }
-
-        # Các action có thể thay đổi trạng thái
-        state_changing_actions = {
-            "hold_flight",
-            "confirm_booking",
-            "cancel_hold",
-        }
-
-        # Read-only action luôn được phép
-        if action in read_only_actions:
-            return {
-                "allowed": True,
-                "reason": "Read-only action is allowed.",
-            }
-
-        # State-changing action yêu cầu passenger_name
-        if action in state_changing_actions:
-            if not state.get("passenger_name"):
-                return {
-                    "allowed": False,
-                    "reason": (
-                        "Passenger name is required "
-                        "for state-changing actions."
-                    ),
-                }
-
-            return {
-                "allowed": True,
-                "reason": (
-                    "Required passenger information exists."
-                ),
-            }
-
-        # Action không nằm trong danh sách được phép
-        return {
-            "allowed": False,
-            "reason": "Unknown action.",
-        }
-
-    # ============================================================
-    # 4. HANDOFF MECHANISM
-    # ============================================================
-
-    def handoff(
-        self,
-        reason: str,
-        attempted_action: list,
-        state: dict,
-        question: str,
-    ) -> dict:
-        """
-        Bàn giao cho con người khi agent không thể
-        hoàn thành nhiệm vụ an toàn.
-        """
-
+    def handoff(self, reason: str, attempted_action: list, state: dict, question: str) -> dict:
         return {
             "stop_reason": reason,
-            "attempted_action": attempted_action,
-            "state": state,
+            "attempted_actions": list(attempted_action),
+            "state_snapshot": dict(state),
             "question_for_human": question,
         }
 
-    # ============================================================
-    # 5. BEFORE TOOL
-    # ============================================================
-
-    def before_tool(
-        self,
-        action: str,
-        args: dict,
-        state: dict,
-        loop_detector: LoopDetector,
-    ) -> dict:
-        """
-        Kiểm tra trước khi Agent được phép gọi Tool.
-
-        Kiểm tra:
-        1. Authorization
-        2. Loop detection
-        """
-
-        # --------------------------------------------------------
-        # Authorization
-        # --------------------------------------------------------
-
-        auth = self.check_authorization(
-            action,
-            state,
-        )
-
-        if not auth["allowed"]:
-            return {
-                "allowed": False,
-                "stop": True,
-                "reason": auth["reason"],
-            }
-
-        # --------------------------------------------------------
-        # Loop detection
-        # --------------------------------------------------------
-
-        loop_reason = loop_detector.check(
-            tool=action,
-            args=args,
-        )
-
-        if loop_reason:
-            return {
-                "allowed": False,
-                "stop": True,
-                "reason": loop_reason,
-            }
-
+    @staticmethod
+    def progress_snapshot(state: dict):
         return {
-            "allowed": True,
-            "stop": False,
-            "reason": "",
+            "status": state.get("status"),
+            "flight_id": state.get("flight_id"),
+            "hold_id": state.get("hold_id"),
+            "booking_id": state.get("booking_id"),
         }
 
-    # ============================================================
-    # 6. AFTER TOOL
-    # ============================================================
+    def before_tool(self, action: str, args: dict, state: dict, loop_detector: LoopDetector) -> dict:
+        auth = self.check_authorization(action, state)
+        if not auth["allowed"]:
+            return {"allowed": False, "stop": True, "reason": auth["reason"]}
 
-    def after_tool(
-        self,
-        action: str,
-        args: dict,
-        result: dict,
-        state: dict,
-        loop_detector: LoopDetector,
-    ) -> dict:
-        """
-        Kiểm tra sau khi Tool thực thi.
+        if action == "hold_flight":
+            check = self.validate_selected_flight(state)
+            if not check["valid"]:
+                return {"allowed": False, "stop": True, "reason": check["reason"]}
 
-        Kiểm tra:
-        1. Loop thông qua observation
-        2. Trạng thái có tiến triển hay không
-        3. Điều kiện hoàn thành
-        4. Handoff nếu cần
-        """
+        if action == "confirm_booking":
+            check = self.validate_hold_for_confirmation(state)
+            if not check["valid"]:
+                return {"allowed": False, "stop": True, "reason": check["reason"]}
 
-        # --------------------------------------------------------
-        # Loop / observation / progress
-        # --------------------------------------------------------
+        loop_reason = loop_detector.check(tool=action, args=args)
+        if loop_reason:
+            return {"allowed": False, "stop": True, "reason": loop_reason}
 
+        return {"allowed": True, "stop": False, "reason": ""}
+
+    def after_tool(self, action: str, args: dict, result: dict, state: dict, loop_detector: LoopDetector) -> dict:
         loop_reason = loop_detector.check(
             tool=action,
             args=args,
             observation=result,
-            progress=state.get("status"),
+            progress=self.progress_snapshot(state),
+            check_action=False,
         )
-
         if loop_reason:
             return {
                 "continue": False,
                 "completed": False,
                 "handoff": self.handoff(
-                    reason=loop_reason,
-                    attempted_action=[action],
-                    state=state,
-                    question=(
-                        "Cần người dùng kiểm tra hoặc "
-                        "quyết định bước tiếp theo."
-                    ),
+                    loop_reason,
+                    state.get("attempted_actions", []),
+                    state,
+                    "Please review the repeated actions/observations and decide the next safe step.",
                 ),
             }
 
-        # --------------------------------------------------------
-        # Completion
-        # --------------------------------------------------------
-
         completion = self.check_completion(state)
-
         if completion["completed"]:
-            return {
-                "continue": False,
-                "completed": True,
-                "handoff": None,
-            }
+            return {"continue": False, "completed": True, "handoff": None, "completion": completion}
 
-        # --------------------------------------------------------
-        # Continue
-        # --------------------------------------------------------
-
-        return {
-            "continue": True,
-            "completed": False,
-            "handoff": None,
-        }
+        return {"continue": True, "completed": False, "handoff": None, "completion": completion}
