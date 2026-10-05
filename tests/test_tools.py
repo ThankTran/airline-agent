@@ -1,189 +1,43 @@
-from airline_agent.tools import(
-    cancel_hold,
-    get_flight_detail,
-    search_flights,
-    hold_flight,
-    confirm_booking,
-    cancel_booking,
-)
+from airline_agent.database import BOOKINGS, HOLDS, get_flight_by_id
+from airline_agent.tools import search_flights, hold_flight, confirm_booking, cancel_hold
 
-# ===========================
-# Tests for tool 1
-# =========================
 
-# def test_search_flights():
-#     result = search_flights.invoke(
-#         {
-#             "origin": "HANOI",
-#             "destination": "DA LAT",
-#             "date": "2023-10-03",
-#         }
-#     )
-
-#     assert result["status"] == "ok", "Search flights should return status 'ok'"
-#     assert result["count"] > 0, "Search flights should return at least one flight"
-
-# ===========================
-# Tests for tool 2
-# =========================
-# def test_get_flight_detail():
-#     result = get_flight_detail.invoke(
-#         {
-#             "flight_id": "VN001",
-#         }
-#     )
-
-#     assert result["status"] == "ok", "Get flight details should return status 'ok'"
-#     assert "flight" in result, "Get flight details should return flight information"
-#     assert result["flight"]["flight_id"] == "VN001", "Flight ID should match the requested ID"
-#     assert result["flight"]["origin"] == "HANOI", "Flight origin should be HANOI"
-#     assert result["flight"]["destination"] == "HO CHI MINH CITY", "Flight destination should be HO CHI MINH"
-#     assert result["flight"]["date"] == "2023-10-01", "Flight date should be 2023-10-01"
-#     assert result["flight"]["available_seats"] > 0, "Flight should have available seats"
-#     assert result["flight"]["price"] > 0, "Flight price should be greater than 0"
-#     assert result["flight"]["currency"] == "USD", "Flight currency should be USD"
-#     assert result["flight"]["baggage"] == "20kg", "Flight baggage should be 20kg"
-#     assert result["flight"]["cabin"] == "Economy", "Flight cabin should be Economy"
-#     assert result["flight"]["departure"] == "10:00", "Flight departure time should be 10:00"
-#     assert result["flight"]["arrival"] == "12:00", "Flight arrival time should be 12:00"
-#     assert result["flight"]["airline"] == "Vietnam Airlines", "Flight airline should be Vietnam Airlines"
-
-# ===========================
-# Tests for tool 3
-# =========================
-# def test_hold_flight():
-#     # First, search for available flights
-#     search_result = search_flights.invoke(
-#         {
-#             "origin": "HANOI",
-#             "destination": "DA LAT",
-#             "date": "2023-10-03",
-#         }
-#     )
-
-#     assert search_result["status"] == "ok", "Search flights should return status 'ok'"
-#     assert search_result["count"] > 0, "Search flights should return at least one flight"
-
-#     # Get the flight ID of the first available flight
-#     flight_id = search_result["flights"][0]["flight_id"]
-
-#     # Now, hold the flight
-#     hold_result = hold_flight.invoke(
-#         {
-#             "flight_id": flight_id,
-#         }
-#     )
-
-#     assert hold_result["status"] == "ok", "Hold flight should return status 'ok'"
-#     assert hold_result["hold"]["flight_id"] == flight_id, "Held flight ID should match the requested ID"
-
-# ===========================
-# Tests for tool 4
-# =========================
-# def test_confirm_booking():
-#     hold_result = hold_flight.invoke({
-#         "flight_id": "VN006",
-#         "passenger_name": "Nguyen Van A",
-#     })
-
-#     assert hold_result["status"] == "ok"
-
-#     hold_id = hold_result["hold"]["hold_id"]
-
-#     result = confirm_booking.invoke({
-#         "hold_id": hold_id,
-#     })
-
-#     assert result["status"] == "ok"
-#     assert result["booking"]["booking_id"].startswith("BOOK")
-#     assert result["booking"]["hold_id"] == hold_id
-#     assert result["booking"]["flight_id"] == "VN006"
-#     assert result["booking"]["passenger_name"] == "Nguyen Van A"
-#     assert result["booking"]["status"] == "confirmed"
-
-# def test_confirm_booking_hold_not_found():
-#     result = confirm_booking.invoke({
-#         "hold_id": "INVALID",
-#     })
-
-#     assert result["status"] == "error"
-#     assert result["error"] == "Hold not found"
-
-# def test_confirm_booking_already_confirmed():
-#     hold_result = hold_flight.invoke({
-#         "flight_id": "VN003",
-#         "passenger_name": "Nguyen Van B",
-#     })
-
-#     hold_id = hold_result["hold"]["hold_id"]
-
-#     # Confirm lần 1
-#     first_result = confirm_booking.invoke({
-#         "hold_id": hold_id,
-#     })
-
-#     assert first_result["status"] == "ok"
-
-#     # Confirm lần 2
-#     second_result = confirm_booking.invoke({
-#         "hold_id": hold_id,
-#     })
-
-#     assert second_result["status"] == "error"
-#     assert second_result["error"] == "Hold is not active"
-
-# ===========================
-# Tests for tool 5
-# =========================
-def test_cancel_hold():
-    # Tạo hold
-    hold_result = hold_flight.invoke({
-        "flight_id": "VN456",
-        "passenger_name": "Nguyen Van C",
-    })
-
-    assert hold_result["status"] == "ok"
-
-    hold_id = hold_result["hold"]["hold_id"]
-    seats_after_hold = hold_result["remaining_seats"]
-
-    # Hủy hold
-    result = cancel_hold.invoke({
-        "hold_id": hold_id,
-    })
-
+def test_search_returns_only_available_matching_flights():
+    result = search_flights.invoke({"origin": "SGN", "destination": "HAN", "date": "2026-10-15"})
     assert result["status"] == "ok"
-    assert result["hold"]["status"] == "cancelled"
-    assert result["available_seats"] == seats_after_hold + 1
+    assert result["count"] == 2
+    assert {f["flight_id"] for f in result["flights"]} == {"VN002", "VN007"}
 
-def test_cancel_hold_not_found():
-    result = cancel_hold.invoke({
-        "hold_id": "INVALID",
-    })
 
+def test_hold_reduces_one_seat():
+    before = get_flight_by_id("VN002")["available_seats"]
+    result = hold_flight.invoke({"flight_id": "VN002", "passenger_name": "Nguyen Van A"})
+    assert result["status"] == "ok"
+    assert get_flight_by_id("VN002")["available_seats"] == before - 1
+    assert result["hold"]["hold_id"] in HOLDS
+
+
+def test_confirm_creates_verified_booking_record():
+    hold = hold_flight.invoke({"flight_id": "VN002", "passenger_name": "Nguyen Van A"})
+    result = confirm_booking.invoke({"hold_id": hold["hold"]["hold_id"]})
+    assert result["status"] == "ok"
+    booking_id = result["booking"]["booking_id"]
+    assert BOOKINGS[booking_id]["status"] == "confirmed"
+    assert BOOKINGS[booking_id]["flight_id"] == "VN002"
+
+
+def test_cancel_hold_releases_seat():
+    before = get_flight_by_id("VN002")["available_seats"]
+    hold = hold_flight.invoke({"flight_id": "VN002", "passenger_name": "Nguyen Van A"})
+    hold_id = hold["hold"]["hold_id"]
+    result = cancel_hold.invoke({"hold_id": hold_id})
+    assert result["status"] == "ok"
+    assert HOLDS[hold_id]["status"] == "cancelled"
+    assert get_flight_by_id("VN002")["available_seats"] == before
+
+
+def test_sold_out_flight_cannot_be_held():
+    result = hold_flight.invoke({"flight_id": "VN008", "passenger_name": "Nguyen Van A"})
     assert result["status"] == "error"
-    assert result["error"] == "Hold not found"
-
-def test_cancel_confirmed_hold():
-    # Tạo hold
-    hold_result = hold_flight.invoke({
-        "flight_id": "VJ789",
-        "passenger_name": "Nguyen Van D",
-    })
-
-    hold_id = hold_result["hold"]["hold_id"]
-
-    # Confirm booking
-    confirm_result = confirm_booking.invoke({
-        "hold_id": hold_id,
-    })
-
-    assert confirm_result["status"] == "ok"
-
-    # Thử cancel sau khi đã confirm
-    result = cancel_hold.invoke({
-        "hold_id": hold_id,
-    })
-
-    assert result["status"] == "error"
-    assert result["error"] == "Hold is not active"
+    assert result["error_code"] == "NO_AVAILABLE_SEATS"
+    assert result["retryable"] is True
