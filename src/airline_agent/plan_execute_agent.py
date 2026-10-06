@@ -47,11 +47,33 @@ class PlanThenExecuteAgent:
             state["observations"].append({"action": action, "result": result})
             state = self._update_state(state, action, result)
 
-            after = self.harness.after_tool(action, args, result, state, detector)
+            if action == "search_flights" and not result.get("flights", []):
+                return self._handoff(
+                    state,
+                    "NO_MATCHING_FLIGHT",
+                    "No matching flight was found. Please choose another route or date",
+                )
+            after = self.harness.after_tool(
+                action,
+                args,
+                result,
+                state,
+                detector,
+            )
+
             if after["handoff"]:
-                return {**state, "status": "handoff", "handoff": after["handoff"], "error": after["handoff"]["stop_reason"]}
+                return {
+                    **state,
+                    "status": "handoff",
+                    "handoff": after["handoff"],
+                    "error": after["handoff"]["stop_reason"],
+                }
+
             if after["completed"]:
-                return {**state, "status": "completed"}
+                return {
+                    **state,
+                    "status": "completed",
+                }
 
             if result.get("status") != "ok":
                 return self._handoff(
@@ -59,7 +81,7 @@ class PlanThenExecuteAgent:
                     result.get("error_code", "TOOL_FAILURE"),
                     "The precomputed plan failed and this pattern does not re-plan automatically.",
                 )
-
+            
         if state.get("user_intent") == "search" and state.get("flight_id"):
             return {**state, "status": "search_completed"}
 
