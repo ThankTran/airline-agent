@@ -1,21 +1,21 @@
 # ✈️ Airline Booking Agent
 
-**Tìm chuyến bay → giữ chỗ → xác nhận vé, với Harness kiểm soát từng bước.**
+**Search flights → hold a seat → confirm a booking, with a Harness checking every step.**
 
-Bài tập **SE373 – Kỹ thuật xây dựng hệ thống Agentic AI**, so sánh **ReAct**, **Plan-then-Execute** và **Hybrid** trên cùng dữ liệu mô phỏng.
+An assignment for **SE373 – Agentic AI System Engineering**, comparing **ReAct**, **Plan-then-Execute**, and **Hybrid** using the same mock data.
 
-Agent hiện quyết định bằng logic Python xác định. LangChain cung cấp giao diện tool; LangGraph triển khai workflow baseline. **Không cần API key, không gọi LLM hoặc dịch vụ đặt vé thật.**
+Agents currently make decisions through deterministic Python logic. LangChain provides the tool interface; LangGraph implements the baseline workflow. **No API key is required, and no LLM or real booking service is called.**
 
-## Điểm nổi bật
+## Highlights
 
-- 🛡️ Harness kiểm tra dữ liệu, quyền xác nhận, kết quả booking và bàn giao cho con người.
-- 🔁 Phát hiện hành động lặp, observation lặp và trạng thái không tiến triển.
-- ⚡ Mô phỏng chuyến bay hết chỗ hoặc bị hủy giữa tìm kiếm và giữ chỗ.
-- 🧪 32 test; 10 tình huống × 3 agent = 30 lượt đánh giá có kiểm soát.
+- 🛡️ A Harness validates data, confirmation authorization, booking results, and handoffs to humans.
+- 🔁 Detection of repeated actions, repeated observations, and stalled state.
+- ⚡ Simulation of flights selling out or being cancelled between search and hold.
+- 🧪 32 tests; 10 scenarios × 3 agents = 30 controlled evaluation runs.
 
-## 🚀 Chạy nhanh
+## 🚀 Quick start
 
-Yêu cầu **Python 3.11+**, `pip`; cần Git nếu tải bằng clone. Chạy trong PowerShell:
+Requires **Python 3.11+** and `pip`; Git is needed to clone the repository. Run in PowerShell:
 
 ```powershell
 git clone https://github.com/ThankTran/airline-agent.git
@@ -26,11 +26,11 @@ python -m venv .venv
 .\.venv\Scripts\python.exe -m airline_agent.demo_graph
 ```
 
-Nếu đã có mã nguồn, mở terminal tại `airline-agent` và bỏ qua hai lệnh đầu. Cài cả requirements và package vì `pyproject.toml` chưa khai báo dependency runtime. Không cần kích hoạt môi trường hoặc cấu hình `.env`.
+If you already have the source code, open a terminal in `airline-agent` and skip the first two commands. Install both the requirements and the package because `pyproject.toml` does not yet declare runtime dependencies. Activating the environment or configuring `.env` is not required.
 
-**macOS/Linux:** tạo môi trường bằng `python3 -m venv .venv`, sau đó thay `.\.venv\Scripts\python.exe` bằng `.venv/bin/python` trong các lệnh.
+**macOS/Linux:** create the environment with `python3 -m venv .venv`, then replace `.\.venv\Scripts\python.exe` with `.venv/bin/python` in the commands.
 
-## Chạy ba agent
+## Run the three agents
 
 ```powershell
 .\.venv\Scripts\python.exe -m airline_agent.react_agent
@@ -38,9 +38,9 @@ Nếu đã có mã nguồn, mở terminal tại `airline-agent` và bỏ qua hai
 .\.venv\Scripts\python.exe -m airline_agent.hybrid_agent
 ```
 
-Demo dùng **SGN → HAN**, ngày **2026-10-15**, hành khách `Nguyen Van A`, đã cho phép xác nhận. Khi database vừa reset, kết quả bình thường có `status="completed"`, `flight_id="VN002"`, `booking_id="BOOK-001"`.
+The demos use **SGN → HAN** on **2026-10-15**, passenger `Nguyen Van A`, with booking confirmation authorized. After a database reset, a normal result includes `status="completed"`, `flight_id="VN002"`, and `booking_id="BOOK-001"`.
 
-Thử phục hồi khi chuyến vừa tìm được hết chỗ, trong Python của môi trường đã cài:
+Try recovering when a flight sells out after search, using Python from the installed environment:
 
 ```python
 from airline_agent.database import reset_database
@@ -61,91 +61,91 @@ print(result["status"], result.get("flight_id"), result.get("retry_count"))
 # completed VN007 1
 ```
 
-Đổi fault thành `cancelled_after_search` để thử hủy chuyến. Đặt `user_confirmed_booking=False` để kiểm tra chặn xác nhận; đặt thêm `user_intent="search"` để chỉ tìm kiếm. Dùng mã sân bay viết hoa, ngày có trong [database.py](src/airline_agent/database.py), và reset database trước mỗi thí nghiệm độc lập.
+Change the fault to `cancelled_after_search` to test cancellation. Set `user_confirmed_booking=False` to test blocked confirmation; also set `user_intent="search"` for search only. Use uppercase airport codes and dates available in [database.py](src/airline_agent/database.py), and reset the database before each independent experiment.
 
-## Kiến trúc
+## Architecture
 
 ```mermaid
 flowchart LR
-    U[Yêu cầu / BookingState] --> A[ReAct / Plan-then-Execute / Hybrid]
+    U[Request / BookingState] --> A[ReAct / Plan-then-Execute / Hybrid]
     A --> B[Harness: before_tool]
     B --> T[LangChain tools]
     T <--> D[(Mock database)]
     T --> C[Harness: after_tool]
-    C -->|Tiếp tục| A
-    C --> E[Hoàn thành / Handoff]
-    B -->|Không hợp lệ| H[Handoff]
+    C -->|Continue| A
+    C --> E[Completion / Handoff]
+    B -->|Invalid| H[Handoff]
 ```
 
-| Thành phần | Vai trò |
+| Component | Role |
 | --- | --- |
-| ReAct | Chọn bước theo state và observation; tối đa 12 bước, 2 lượt retry phục hồi lỗi chuyến bay. |
-| Plan-then-Execute | Kế hoạch cố định; bàn giao khi thất bại, không tự lập lại kế hoạch. |
-| Hybrid | Kết hợp kế hoạch với state thực tế; tối đa 2 lần re-plan. |
-| Harness | Kiểm tra tuyến/ngày, chuyến/hold, quyền commit; xác minh booking trong database và phát hiện loop/stall. |
-| LangGraph baseline | Workflow `validate → search → hold → confirm → completion`, có nhánh dừng khi lỗi. |
+| ReAct | Selects steps based on state and observations; up to 12 steps and 2 recovery retries for flight failures. |
+| Plan-then-Execute | Uses a fixed plan; hands off on failure without automatic replanning. |
+| Hybrid | Combines a plan with the current state; up to 2 replans. |
+| Harness | Validates route/date, flight/hold, and commit authorization; verifies bookings in the database and detects loops/stalls. |
+| LangGraph baseline | Runs `validate → search → hold → confirm → completion`, with branches that stop on errors. |
 
-Năm tool: `search_flights`, `get_flight_detail`, `hold_flight`, `confirm_booking`, `cancel_hold`. Luồng đặt vé chính dùng search, hold và confirm. Payload handoff gồm `stop_reason`, `attempted_actions`, `state_snapshot`, `question_for_human`.
+The five tools are `search_flights`, `get_flight_detail`, `hold_flight`, `confirm_booking`, and `cancel_hold`. The main booking flow uses search, hold, and confirm. A handoff payload includes `stop_reason`, `attempted_actions`, `state_snapshot`, and `question_for_human`.
 
-## 🧪 Kiểm thử và đánh giá
+## 🧪 Testing and evaluation
 
-Chạy tại thư mục gốc repo:
+Run from the repository root:
 
 ```powershell
 .\.venv\Scripts\python.exe -m pytest -q
 .\.venv\Scripts\python.exe -m airline_agent.evaluation
 ```
 
-Bộ đánh giá gồm đặt vé bình thường, thiếu ngày, trùng sân bay, mã sân bay sai, không có chuyến, thiếu tên, chưa cho phép xác nhận, chỉ tìm kiếm và hai lỗi động. Database được reset trước mỗi lượt.
+The evaluation covers normal booking, missing date, identical airports, invalid airport code, no matching flight, missing passenger name, unauthorized confirmation, search-only intent, and two dynamic faults. The database is reset before each run.
 
-Kiểm tra ngày **06-10-2026**: **32 test pass, 30/30 lượt đúng hành vi kỳ vọng**.
+Verified on **October 6, 2026**: **32 tests passed, and 30/30 runs matched the expected behavior**.
 
-| Agent | Đúng kỳ vọng | Phục hồi S09–S10 | Lần thử gọi tool TB | Booking trái phép |
+| Agent | Matched expectations | Recovery in S09–S10 | Avg. attempted tool calls | Unauthorized bookings |
 | --- | ---: | ---: | ---: | ---: |
 | ReAct | 10/10 | 2/2 | 2.3 | 0 |
 | Plan-then-Execute | 10/10 | 0/2 | 1.4 | 0 |
 | Hybrid | 10/10 | 2/2 | 2.2 | 0 |
 
-**Cách đọc:** đúng kỳ vọng bao gồm cả bàn giao an toàn và hoàn thành tìm kiếm. Plan-then-Execute được kỳ vọng handoff ở S09–S10; 100% đúng kỳ vọng không có nghĩa 100% đặt vé thành công. `tool_calls` đếm `attempted_actions`, kể cả hành động bị Harness chặn; `observation_count` phản ánh số tool thực thi.
+**How to read the results:** expected behavior includes safe handoffs and completed searches. Plan-then-Execute is expected to hand off in S09–S10; matching expectations in 100% of runs does not mean every run creates a booking. `tool_calls` counts `attempted_actions`, including actions blocked by the Harness; `observation_count` reflects executed tools.
 
-Evaluation tạo hoặc ghi đè [evaluation_results.csv](reports/evaluation_results.csv) (chi tiết 30 lượt) và [evaluation_summary.csv](reports/evaluation_summary.csv) (tổng hợp). [report.md](reports/report.md) chứa phân tích bổ sung, không được sinh lại bởi lệnh này.
+Evaluation creates or overwrites [evaluation_results.csv](reports/evaluation_results.csv) (details of 30 runs) and [evaluation_summary.csv](reports/evaluation_summary.csv) (aggregate results). [report.md](reports/report.md) contains additional analysis and is not regenerated by this command.
 
-## Cấu trúc mã nguồn
+## Project structure
 
 ```text
 airline-agent/
 ├── src/airline_agent/
-│   ├── database.py           # FLIGHTS, HOLDS, BOOKINGS và reset
-│   ├── tools.py              # 5 tool nghiệp vụ
+│   ├── database.py           # FLIGHTS, HOLDS, BOOKINGS, and reset
+│   ├── tools.py              # 5 business tools
 │   ├── state.py              # BookingState
 │   ├── harness.py            # BookingHarness, LoopDetector
-│   ├── booking_graph.py      # Workflow baseline LangGraph
-│   ├── demo_graph.py         # Demo baseline
+│   ├── booking_graph.py      # Baseline LangGraph workflow
+│   ├── demo_graph.py         # Baseline demo
 │   ├── react_agent.py        # ReActAgent
 │   ├── plan_execute_agent.py # PlanThenExecuteAgent
 │   ├── hybrid_agent.py       # HybridAgent
-│   ├── fault_injection.py   # Biến cố có kiểm soát
-│   └── evaluation.py        # Kịch bản, thống kê và xuất CSV
+│   ├── fault_injection.py   # Controlled faults
+│   └── evaluation.py        # Scenarios, statistics, and CSV export
 ├── tests/                   # Database, tools, harness, agents, faults
-├── reports/                 # Kết quả và phân tích
+├── reports/                 # Results and analysis
 ├── requirements.txt
 ├── pyproject.toml
 └── LICENSE
 ```
 
-## Phạm vi và xử lý lỗi nhanh
+## Scope and troubleshooting
 
-Dữ liệu nằm trong RAM; chưa có lưu trữ bền vững, thanh toán, xác thực thật hoặc xử lý cạnh tranh giữ ghế. Kết quả chỉ phản ánh tập kịch bản mô phỏng; chưa đo reasoning của LLM, latency hay chi phí token. Dependency hiện chưa khóa phiên bản.
+Data is stored in memory; persistent storage, payments, real authentication, and concurrent seat reservation handling are not implemented. Results reflect only the simulated scenarios; LLM reasoning, latency, and token costs have not been measured. Dependency versions are not currently pinned.
 
-| Vấn đề | Cách xử lý |
+| Problem | Solution |
 | --- | --- |
-| `No module named airline_agent` | Chạy `-m pip install -e .` từ gốc repo bằng đúng Python trong `.venv`. |
-| Thiếu `langgraph`, `langchain_core`, `pytest` | Cài `-m pip install -r requirements.txt` bằng cùng Python. |
-| Không tìm được chuyến | Kiểm tra tuyến/ngày trong dữ liệu mẫu; demo dùng SGN–HAN, 2026-10-15. |
-| Kết quả khác sau nhiều lần chạy trong một phiên | Gọi `reset_database()`; thao tác giữ chỗ làm giảm số ghế. |
+| `No module named airline_agent` | Run `-m pip install -e .` from the repository root using the correct Python in `.venv`. |
+| Missing `langgraph`, `langchain_core`, or `pytest` | Install with `-m pip install -r requirements.txt` using the same Python. |
+| No matching flight | Check the route/date in the sample data; the demos use SGN–HAN, 2026-10-15. |
+| Different results after repeated runs in one session | Call `reset_database()`; holding a seat reduces the available seat count. |
 
-## Tác giả và giấy phép
+## Author and license
 
-**Trần Thị Hồng Thanh · 24521643** — Trường Đại học Công nghệ Thông tin, ĐHQG-HCM.
+**Trần Thị Hồng Thanh · 24521643** — University of Information Technology, VNU-HCM.
 
-[Mã nguồn GitHub](https://github.com/ThankTran/airline-agent) · [Giấy phép MIT](LICENSE)
+[GitHub source code](https://github.com/ThankTran/airline-agent) · [MIT License](LICENSE)
