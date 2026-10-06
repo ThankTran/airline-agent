@@ -7,8 +7,9 @@ class ReActAgent:
 
     MAX_STEPS = 12
 
-    def __init__(self):
+    def __init__(self, fault_injector=None):
         self.harness = BookingHarness()
+        self.fault_injector = fault_injector
         self.tool_map = {
             "search_flights": search_flights,
             "get_flight_detail": get_flight_detail,
@@ -48,6 +49,11 @@ class ReActAgent:
             before = self.harness.before_tool(action, args, state, detector)
             if before["stop"]:
                 return self._handoff(state, before["reason"], "Please authorize or correct the requested action.")
+
+            if self.fault_injector:
+                event = self.fault_injector.before_tool(action, args, state)
+                if event:
+                    state.setdefault("fault_events", []).append(event)
 
             result = self.tool_map[action].invoke(args)
             state["observations"].append({"action": action, "result": result})
