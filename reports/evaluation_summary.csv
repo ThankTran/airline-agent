@@ -1,0 +1,4 @@
+﻿agent,scenarios,task_success_rate,correct_handoff_rate,unauthorized_booking_count,recovery_success_rate,avg_tool_calls,avg_retry_count,execution_error_count
+ReAct,10,1.0,1.0,0,1.0,2.3,0.2,0
+Plan-then-Execute,10,1.0,1.0,0,0.0,1.4,0,0
+Hybrid,10,1.0,1.0,0,1.0,2.2,0.2,0
